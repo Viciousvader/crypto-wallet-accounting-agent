@@ -57,7 +57,7 @@ A thin FastAPI web wrapper is included so a user can:
 ### Public App
 Add your Railway link here:
 
-`PASTE_PUBLIC_URL_HERE`
+(https://crypto-wallet-accounting-agent-production.up.railway.app/)
 
 ## Local Run - Web Version
 
