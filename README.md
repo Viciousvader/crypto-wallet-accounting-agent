@@ -1,130 +1,165 @@
 # Crypto Wallet Accounting Agent - Ethereum MVP
 
-This project is an **Ethereum-first crypto wallet accounting pipeline** built in phases to keep the blast radius small and make testing easier.
+Ethereum-first crypto wallet accounting pipeline that scans wallet activity, normalizes transactions, classifies activity, enriches rows with pricing, and exports an accountant-friendly `.xlsx` workbook.
 
-Current MVP pipeline:
+This project was built in phases to keep the blast radius small and make testing easier.
 
-`wallet scan -> raw ingestion -> normalization -> classification -> pricing -> xlsx export`
+## Current MVP Pipeline
 
-## What it does right now
+wallet scan -> raw ingestion -> normalization -> classification -> pricing -> xlsx export
 
-- validates a public Ethereum wallet address
-- fetches normal transactions from Etherscan V2
-- fetches ERC-20 token transfer history
-- saves raw JSON files to disk
-- normalizes wallet history into a cleaner transaction record set
-- classifies transactions into accounting-relevant event types
-- enriches many ETH and mainstream stablecoin rows with historical USD pricing
-- exports an accountant-style Excel workbook
+## What It Does
 
-## What is working well in the current MVP
+- connects to an Ethereum wallet address
+- fetches wallet activity using Etherscan V2
+- saves raw transaction data
+- normalizes transaction records into a cleaner internal structure
+- classifies rows into accounting-relevant categories
+- enriches rows with pricing where possible
+- exports an accountant-friendly Excel workbook
+- flags uncertain / weird / spam / long-tail token activity for human review instead of pretending to know
 
-- Ethereum mainnet ingestion
-- raw / normalized / classified / priced JSON saves
-- Excel workbook export
-- Google Sheets import of the workbook
-- workbook tabs:
-  - `All Transactions`
-  - `Needs Review`
-  - `Summary`
-- mainstream stablecoin handling is mostly in good shape for USDC and USDT
-- many ETH rows price correctly
-- weird long-tail / meme / spam tokens are intentionally left as review items when needed
+## Current Scope
 
-## Current limitations
+This is an **Ethereum-first MVP**.
 
-This is an MVP, not a full tax engine.
+Current priorities:
+- ETH activity
+- mainstream stablecoins like USDT / USDC
+- accountant-friendly spreadsheet export
+- readable review workflow for ambiguous rows
 
-Current limitations include:
+This is **not** pretending to be a full tax filing engine yet.
 
-- Ethereum only
-- not all long-tail tokens price cleanly
-- some contract-interaction noise may still appear in review on messy wallets
-- cost basis and tax-lot accounting are not implemented
-- tax forms are not generated
-- output is designed for review, not blind one-click filing
+Planned future chain expansion:
+- Base
+- BNB Chain
+- Avalanche
 
-## Setup
+## Output
 
-1. Install Python 3.11+ if needed.
-2. Open a terminal in this folder.
-3. Install dependencies:
+The workbook currently exports tabs such as:
 
-```bash
-pip install -r requirements.txt
-```
+- `All Transactions`
+- `Needs Review`
+- `Summary`
 
-4. Copy `.env.example` to `.env`
-5. Put your Etherscan API key into `.env`
+It is designed to work well in Excel and can also be imported into Google Sheets.
 
-## Run
+## Web App
 
-Basic run:
+A thin FastAPI web wrapper is included so a user can:
 
-```bash
-python main.py --wallet 0xYourWalletAddressHere
-```
+1. paste a wallet address
+2. click **Analyze Wallet**
+3. download the generated `.xlsx`
 
-Optional chain argument is included for future-proofing, but the MVP currently supports Ethereum only:
+### Public App
+Add your Railway link here:
+
+`PASTE_PUBLIC_URL_HERE`
+
+## Local Run - Web Version
+
+Install dependencies:
 
 ```bash
-python main.py --wallet 0xYourWalletAddressHere --chain ethereum
+python -m pip install -r requirements.txt
 ```
 
-## Output files
+Run the web app locally:
 
-### Raw data
-Saved to `data/raw/`:
-- `normal_transactions_<wallet>.json`
-- `token_transfers_<wallet>.json`
+```bash
+python -m uvicorn app:app --reload
+```
 
-### Processed data
-Saved to `data/processed/`:
-- `normalized_transactions_<wallet>.json`
-- `classified_transactions_<wallet>.json`
-- `priced_transactions_<wallet>.json`
+Open in browser:
 
-### Workbook export
-Saved to `data/output/`:
-- `accountant_export_<wallet>.xlsx`
+```text
+http://127.0.0.1:8000
+```
 
-## Workbook tabs
+## Local Run - CLI Version
 
-### All Transactions
-Main export sheet with normalized, classified, and priced transaction history.
+Install dependencies:
 
-### Needs Review
-Rows that still need human review because they are uncertain, unsupported, or intentionally conservative.
+```bash
+python -m pip install -r requirements.txt
+```
 
-### Summary
-High-level workbook summary for quick review.
+Run from command line:
 
-## Example use case
+```bash
+python main.py --wallet 0xYOURWALLET
+```
 
-This tool is currently best suited for:
-- reading Ethereum wallet history
-- making ETH and mainstream stablecoin activity more understandable
-- giving an accountant or reviewer a structured workbook instead of raw explorer data
+## Environment Variables
 
-## Design approach
+Create a `.env` file and add:
 
-The project was built in phases to reduce regressions:
-- Phase 1: ingestion
-- Phase 2: normalization
-- Phase 3: classification
-- Phase 4: spreadsheet export
-- Phase 5: workbook polish
-- Phase 6: pricing hardening and messy-wallet review cleanup
-- Phase 7: repo cleanup and portfolio-ready polish
+```env
+ETHERSCAN_API_KEY=your_key_here
+DEFAULT_CHAIN=ethereum
+RAW_DATA_DIR=data/raw
+REQUEST_TIMEOUT_SECONDS=60
+```
 
-## Success criteria for the current MVP
+## Tech Stack
 
-A valid Ethereum wallet should:
-- complete the full pipeline without crashing
-- save raw, normalized, classified, and priced JSON outputs
-- generate an Excel workbook
-- make ETH and mainstream stablecoin activity readable enough for human review
+- Python
+- FastAPI
+- OpenPyXL
+- Requests
+- Etherscan API
 
-## Notes
+## Repository Structure
 
-This repo is intentionally honest about scope. The goal is to produce a useful accounting-oriented wallet export for Ethereum activity, not to pretend every token or tax edge case is already solved.
+```text
+.
+├── app.py
+├── main.py
+├── config.py
+├── requirements.txt
+└── src
+    ├── export
+    │   └── xlsx_exporter.py
+    ├── ingest
+    │   └── etherscan_client.py
+    ├── process
+    │   ├── classifier.py
+    │   ├── normalizer.py
+    │   └── pricing.py
+    └── utils
+        ├── file_io.py
+        └── validators.py
+```
+
+## MVP Notes
+
+- ETH and mainstream stablecoin handling are the main priority
+- weird / meme / spam tokens are intentionally pushed toward review when confidence is low
+- failed price lookups are handled conservatively
+- Google Sheets import works, though some column widths may need manual adjustment after import
+
+## Why This Project Exists
+
+This project was built as a practical accounting-oriented crypto wallet pipeline:
+- structured ingestion
+- staged processing
+- conservative classification
+- pricing enrichment
+- usable spreadsheet output
+
+The goal was to build something real, testable, and resume-worthy without overengineering the first version.
+
+## Next Likely Improvements
+
+- add more chains
+- improve public UI polish
+- improve Google Sheets formatting compatibility
+- add direct hosted demo polish
+- expand pricing coverage for more assets
+
+## License
+
+MIT
