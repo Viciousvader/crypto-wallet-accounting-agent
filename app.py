@@ -7,9 +7,9 @@ import shutil
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query
+from fastapi import FastAPI, Form, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from main import run_wallet_pipeline
@@ -176,6 +176,7 @@ def _run_job(job_id: str, wallet_address: str) -> None:
             result=result,
             workbook_path=str(workbook_path),
             workbook_filename=workbook_path.name,
+            error="",
         )
     except Exception as exc:
         detail = str(exc).strip() or exc.__class__.__name__
@@ -188,6 +189,11 @@ def _run_job(job_id: str, wallet_address: str) -> None:
             error=detail,
             traceback=traceback.format_exc(limit=5),
         )
+
+
+def _start_job_thread(job_id: str, wallet_address: str) -> None:
+    worker = Thread(target=_run_job, args=(job_id, wallet_address), daemon=True)
+    worker.start()
 
 
 @app.get("/health")
@@ -311,7 +317,11 @@ def home() -> HTMLResponse:
                 const downloadLink = document.getElementById("download-link");
                 const jobMeta = document.getElementById("job-meta");
 
+                const POLL_INTERVAL_MS = 2500;
+                const MAX_CONSECUTIVE_POLL_ERRORS = 3;
+
                 let activePoll = null;
+                let consecutivePollErrors = 0;
 
                 function resetStatus() {
                     statusPanel.classList.remove("hidden");
@@ -322,6 +332,7 @@ def home() -> HTMLResponse:
                     downloadLink.classList.add("hidden");
                     downloadLink.removeAttribute("href");
                     jobMeta.textContent = "";
+                    consecutivePollErrors = 0;
                 }
 
                 function stopPolling() {
@@ -331,31 +342,65 @@ def home() -> HTMLResponse:
                     }
                 }
 
+                async function parseResponsePayload(response) {
+                    const text = await response.text();
+                    if (!text) {
+                        return {};
+                    }
+                    try {
+                        return JSON.parse(text);
+                    } catch {
+                        return { detail: text };
+                    }
+                }
+
                 async function pollJob(jobId, token) {
-                    const response = await fetch(`/status/${jobId}?token=${encodeURIComponent(token)}`);
-                    const payload = await response.json();
+                    try {
+                        const response = await fetch(`/status/${jobId}?token=${encodeURIComponent(token)}`, {
+                            cache: "no-store",
+                        });
+                        const payload = await parseResponsePayload(response);
 
-                    if (!response.ok) {
-                        throw new Error(payload.detail || "Unable to fetch job status.");
-                    }
+                        if (!response.ok) {
+                            throw new Error(payload.detail || "Unable to fetch job status.");
+                        }
 
-                    jobStatus.textContent = payload.status;
-                    jobStep.textContent = payload.current_step || "-";
+                        consecutivePollErrors = 0;
+                        jobError.textContent = "";
+                        jobError.classList.add("hidden");
 
-                    if (payload.created_at) {
-                        jobMeta.textContent = `Wallet: ${payload.wallet_address} | Expires: ${payload.expires_at}`;
-                    }
+                        jobStatus.textContent = payload.status;
+                        jobStep.textContent = payload.current_step || "-";
 
-                    if (payload.status === "complete") {
+                        if (payload.created_at) {
+                            jobMeta.textContent = `Wallet: ${payload.wallet_address} | Expires: ${payload.expires_at}`;
+                        }
+
+                        if (payload.status === "complete") {
+                            stopPolling();
+                            downloadLink.href = payload.download_url;
+                            downloadLink.textContent = `Download workbook (${payload.workbook_filename})`;
+                            downloadLink.classList.remove("hidden");
+                            submitButton.disabled = false;
+                            submitButton.textContent = "Analyze Wallet";
+                        } else if (payload.status === "failed") {
+                            stopPolling();
+                            jobError.textContent = payload.error || "Pipeline failed.";
+                            jobError.classList.remove("hidden");
+                            submitButton.disabled = false;
+                            submitButton.textContent = "Analyze Wallet";
+                        }
+                    } catch (error) {
+                        consecutivePollErrors += 1;
+
+                        if (consecutivePollErrors < MAX_CONSECUTIVE_POLL_ERRORS) {
+                            jobError.textContent = `Temporary status check issue. Retrying (${consecutivePollErrors}/${MAX_CONSECUTIVE_POLL_ERRORS - 1})...`;
+                            jobError.classList.remove("hidden");
+                            return;
+                        }
+
                         stopPolling();
-                        downloadLink.href = payload.download_url;
-                        downloadLink.textContent = `Download workbook (${payload.workbook_filename})`;
-                        downloadLink.classList.remove("hidden");
-                        submitButton.disabled = false;
-                        submitButton.textContent = "Analyze Wallet";
-                    } else if (payload.status === "failed") {
-                        stopPolling();
-                        jobError.textContent = payload.error || "Pipeline failed.";
+                        jobError.textContent = error.message || "Unable to fetch job status.";
                         jobError.classList.remove("hidden");
                         submitButton.disabled = false;
                         submitButton.textContent = "Analyze Wallet";
@@ -376,8 +421,9 @@ def home() -> HTMLResponse:
                         const response = await fetch("/analyze", {
                             method: "POST",
                             body: formData,
+                            cache: "no-store",
                         });
-                        const payload = await response.json();
+                        const payload = await parseResponsePayload(response);
 
                         if (!response.ok) {
                             throw new Error(payload.detail || "Unable to start analysis.");
@@ -388,22 +434,10 @@ def home() -> HTMLResponse:
                         jobMeta.textContent = `Wallet: ${payload.wallet_address} | Expires: ${payload.expires_at}`;
 
                         activePoll = setInterval(() => {
-                            pollJob(payload.job_id, payload.token).catch((error) => {
-                                stopPolling();
-                                jobError.textContent = error.message;
-                                jobError.classList.remove("hidden");
-                                submitButton.disabled = false;
-                                submitButton.textContent = "Analyze Wallet";
-                            });
-                        }, 2500);
+                            pollJob(payload.job_id, payload.token);
+                        }, POLL_INTERVAL_MS);
 
-                        pollJob(payload.job_id, payload.token).catch((error) => {
-                            stopPolling();
-                            jobError.textContent = error.message;
-                            jobError.classList.remove("hidden");
-                            submitButton.disabled = false;
-                            submitButton.textContent = "Analyze Wallet";
-                        });
+                        pollJob(payload.job_id, payload.token);
                     } catch (error) {
                         jobError.textContent = error.message || "Unable to start analysis.";
                         jobError.classList.remove("hidden");
@@ -419,7 +453,7 @@ def home() -> HTMLResponse:
 
 
 @app.post("/analyze")
-def analyze(background_tasks: BackgroundTasks, wallet: str = Form(...)) -> JSONResponse:
+def analyze(wallet: str = Form(...)) -> JSONResponse:
     _cleanup_expired_jobs()
 
     try:
@@ -428,7 +462,7 @@ def analyze(background_tasks: BackgroundTasks, wallet: str = Form(...)) -> JSONR
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     job = _create_job(normalized_wallet)
-    background_tasks.add_task(_run_job, job["job_id"], normalized_wallet)
+    _start_job_thread(job["job_id"], normalized_wallet)
 
     return JSONResponse(
         {
@@ -439,7 +473,8 @@ def analyze(background_tasks: BackgroundTasks, wallet: str = Form(...)) -> JSONR
             "current_step": job["current_step"],
             "created_at": job["created_at"],
             "expires_at": job["expires_at"],
-        }
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -467,7 +502,8 @@ def job_status(job_id: str, token: str = Query(...)) -> JSONResponse:
             "download_url": download_url,
             "counts": (job.get("result") or {}).get("counts", {}),
             "summaries": (job.get("result") or {}).get("summaries", {}),
-        }
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -489,4 +525,5 @@ def download(job_id: str, token: str = Query(...)) -> FileResponse:
         path=workbook_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=filename,
+        headers={"Cache-Control": "no-store"},
     )
