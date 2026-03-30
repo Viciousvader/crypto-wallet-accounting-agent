@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Callable
 
 from config import get_settings
 from src.export.xlsx_exporter import export_classified_history_to_workbook
@@ -38,8 +39,21 @@ def count_results(payload: dict) -> int:
     return len(result) if isinstance(result, list) else 0
 
 
-def run_wallet_pipeline(wallet_address: str, chain: str = "ethereum") -> dict:
+def run_wallet_pipeline(
+    wallet_address: str,
+    chain: str = "ethereum",
+    *,
+    raw_data_dir: Path | None = None,
+    processed_data_dir: Path | None = None,
+    output_data_dir: Path | None = None,
+    price_cache_path: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict:
     settings = get_settings()
+
+    def report(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
 
     requested_chain = (chain or settings.default_chain).strip().lower()
     if requested_chain != "ethereum":
@@ -47,18 +61,27 @@ def run_wallet_pipeline(wallet_address: str, chain: str = "ethereum") -> dict:
 
     wallet_address = validate_ethereum_wallet(wallet_address)
 
+    resolved_raw_data_dir = raw_data_dir or settings.raw_data_dir
+    resolved_processed_data_dir = processed_data_dir or settings.processed_data_dir
+    resolved_output_data_dir = output_data_dir or settings.output_data_dir
+    resolved_price_cache_path = price_cache_path or settings.price_cache_path
+
     client = EtherscanClient(
         api_key=settings.etherscan_api_key,
         timeout_seconds=settings.request_timeout_seconds,
     )
 
+    report("Fetching normal transactions")
     normal_payload = client.fetch_normal_transactions(wallet_address)
+
+    report("Fetching ERC-20 token transfers")
     token_payload = client.fetch_erc20_token_transfers(wallet_address)
 
-    normal_path, token_path = build_raw_output_paths(settings.raw_data_dir, wallet_address)
+    normal_path, token_path = build_raw_output_paths(resolved_raw_data_dir, wallet_address)
     save_json(normal_path, normal_payload)
     save_json(token_path, token_payload)
 
+    report("Normalizing wallet history")
     normalized_payload = normalize_wallet_history(
         wallet_address=wallet_address,
         normal_payload=normal_payload,
@@ -66,26 +89,31 @@ def run_wallet_pipeline(wallet_address: str, chain: str = "ethereum") -> dict:
         chain=requested_chain,
     )
     normalized_path, classified_path, priced_path = build_processed_output_paths(
-        settings.processed_data_dir, wallet_address
+        resolved_processed_data_dir, wallet_address
     )
     save_json(normalized_path, normalized_payload)
 
+    report("Classifying wallet history")
     classified_payload = classify_wallet_history(normalized_payload)
     save_json(classified_path, classified_payload)
 
+    report("Enriching wallet history with historical USD pricing")
     priced_payload = enrich_wallet_history_with_prices(
         classified_payload=classified_payload,
-        cache_path=settings.price_cache_path,
+        cache_path=resolved_price_cache_path,
         timeout_seconds=settings.request_timeout_seconds,
     )
     save_json(priced_path, priced_payload)
 
-    workbook_path = build_export_output_path(settings.output_data_dir, wallet_address)
+    report("Exporting accountant workbook")
+    workbook_path = build_export_output_path(resolved_output_data_dir, wallet_address)
     workbook_result = export_classified_history_to_workbook(priced_payload, workbook_path)
 
     normalized_summary = normalized_payload.get("summary", {})
     classified_summary = classified_payload.get("summary", {})
     priced_summary = priced_payload.get("summary", {})
+
+    report("Workbook ready")
 
     return {
         "wallet_address": wallet_address,
