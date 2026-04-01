@@ -4,6 +4,9 @@ Ethereum-first crypto wallet accounting pipeline that scans wallet activity, nor
 
 This project was built in phases to keep the blast radius small and make testing easier.
 
+## Demo Video
+
+Watch the project demo here: https://www.youtube.com/watch?v=_MVHkJd8two
 ## Current MVP Pipeline
 
 wallet scan -> raw ingestion -> normalization -> classification -> pricing -> xlsx export
